@@ -8,11 +8,10 @@
  *
  *   Currently unimplemented:
  *   -  calculateLux function
+ *   -  Interrupt-driven operation
  *
  *   Not currently working right:
- *   -  FULLSPECTRUM and INFRARED don't seem to work
- *   -  timing other than _402MS doesn't seem to work
- *   -  gain doesn't seem to have any effect
+ *   -  INFRARED doesn't seem to work
  *
  *   It's possibly the features listed above _do_ work, but my particular
  *   TSL2561 breakout sensor _doesn't_ work for some reason.  Or there are
@@ -21,10 +20,11 @@
 
 function TSL(i2c) {
     this.i2c = i2c;
+    this.debug = false;
 }
 
 // All the constants we should need to drive this thing
-TSL.prototype.C = {
+TSL.prototype.config = {
     spectrum: {
         FULLSPECTRUM: 0,
         INFRARED: 1,
@@ -37,37 +37,6 @@ TSL.prototype.C = {
         HIGH: 0x49
     },
 
-    READBIT: (0x01),
-    COMMAND_BIT: (0x80), // Must be 1
-    CLEAR_BIT: (0x40), // Clears any pending interrupt (write 1 to clear)
-    WORD_BIT: (0x20), // 1 = read/write word (rather than byte)
-    BLOCK_BIT: (0x10), // 1 = using block read/write
-
-    CONTROL_POWERON: (0x03),
-    CONTROL_POWEROFF: (0x00),
-
-    LUX_LUXSCALE: (14), // Scale by 2^14
-    LUX_RATIOSCALE: (9), // Scale ratio by 2^9
-    LUX_CHSCALE: (10), // Scale channel values by 2^10
-    LUX_CHSCALE_TINT0: (0x7517), // 322/11 * 2^TSL2561_LUX_CHSCALE
-    LUX_CHSCALE_TINT1: (0x0FE7), // 322/81 * 2^TSL2561_LUX_CHSCALE
-
-    registers: {
-        CONTROL: 0x00,
-        TIMING: 0x01,
-        THRESHHOLDL_LOW: 0x02,
-        THRESHHOLDL_HIGH: 0x03,
-        THRESHHOLDH_LOW: 0x04,
-        THRESHHOLDH_HIGH: 0x05,
-        INTERRUPT: 0x06,
-        CRC: 0x08,
-        ID: 0x0A,
-        CHAN0_LOW: 0x0C,
-        CHAN0_HIGH: 0x0D,
-        CHAN1_LOW: 0x0E,
-        CHAN1_HIGH: 0x0F
-    },
-
     timing: {
         _13MS: 0x00, // 13.7ms
         _101MS: 0x01, // 101ms
@@ -77,88 +46,62 @@ TSL.prototype.C = {
     gain: {
         _0X: 0x00, // No gain
         _16X: 0x10 // 16x gain
-    },
-
-    // T, FN and CL package values
-    values_t: {
-        LUX_K1: (0x0040), // 0.125 * 2^RATIO_SCALE
-        LUX_B1: (0x01f2), // 0.0304 * 2^LUX_SCALE
-        LUX_M1: (0x01be), // 0.0272 * 2^LUX_SCALE
-        LUX_K2: (0x0080), // 0.250 * 2^RATIO_SCALE
-        LUX_B2: (0x0214), // 0.0325 * 2^LUX_SCALE
-        LUX_M2: (0x02d1), // 0.0440 * 2^LUX_SCALE
-        LUX_K3: (0x00c0), // 0.375 * 2^RATIO_SCALE
-        LUX_B3: (0x023f), // 0.0351 * 2^LUX_SCALE
-        LUX_M3: (0x037b), // 0.0544 * 2^LUX_SCALE
-        LUX_K4: (0x0100), // 0.50 * 2^RATIO_SCALE
-        LUX_B4: (0x0270), // 0.0381 * 2^LUX_SCALE
-        LUX_M4: (0x03fe), // 0.0624 * 2^LUX_SCALE
-        LUX_K5: (0x0138), // 0.61 * 2^RATIO_SCALE
-        LUX_B5: (0x016f), // 0.0224 * 2^LUX_SCALE
-        LUX_M5: (0x01fc), // 0.0310 * 2^LUX_SCALE
-        LUX_K6: (0x019a), // 0.80 * 2^RATIO_SCALE
-        LUX_B6: (0x00d2), // 0.0128 * 2^LUX_SCALE
-        LUX_M6: (0x00fb), // 0.0153 * 2^LUX_SCALE
-        LUX_K7: (0x029a), // 1.3 * 2^RATIO_SCALE
-        LUX_B7: (0x0018), // 0.00146 * 2^LUX_SCALE
-        LUX_M7: (0x0012), // 0.00112 * 2^LUX_SCALE
-        LUX_K8: (0x029a), // 1.3 * 2^RATIO_SCALE
-        LUX_B8: (0x0000), // 0.000 * 2^LUX_SCALE
-        LUX_M8: (0x0000) // 0.000 * 2^LUX_SCALE
-    },
-
-    // CS package values
-    values_cs: {
-        LUX_K1: (0x0043), // 0.130 * 2^RATIO_SCALE
-        LUX_B1: (0x0204), // 0.0315 * 2^LUX_SCALE
-        LUX_M1: (0x01ad), // 0.0262 * 2^LUX_SCALE
-        LUX_K2: (0x0085), // 0.260 * 2^RATIO_SCALE
-        LUX_B2: (0x0228), // 0.0337 * 2^LUX_SCALE
-        LUX_M2: (0x02c1), // 0.0430 * 2^LUX_SCALE
-        LUX_K3: (0x00c8), // 0.390 * 2^RATIO_SCALE
-        LUX_B3: (0x0253), // 0.0363 * 2^LUX_SCALE
-        LUX_M3: (0x0363), // 0.0529 * 2^LUX_SCALE
-        LUX_K4: (0x010a), // 0.520 * 2^RATIO_SCALE
-        LUX_B4: (0x0282), // 0.0392 * 2^LUX_SCALE
-        LUX_M4: (0x03df), // 0.0605 * 2^LUX_SCALE
-        LUX_K5: (0x014d), // 0.65 * 2^RATIO_SCALE
-        LUX_B5: (0x0177), // 0.0229 * 2^LUX_SCALE
-        LUX_M5: (0x01dd), // 0.0291 * 2^LUX_SCALE
-        LUX_K6: (0x019a), // 0.80 * 2^RATIO_SCALE
-        LUX_B6: (0x0101), // 0.0157 * 2^LUX_SCALE
-        LUX_M6: (0x0127), // 0.0180 * 2^LUX_SCALE
-        LUX_K7: (0x029a), // 1.3 * 2^RATIO_SCALE
-        LUX_B7: (0x0037), // 0.00338 * 2^LUX_SCALE
-        LUX_M7: (0x002b), // 0.00260 * 2^LUX_SCALE
-        LUX_K8: (0x029a), // 1.3 * 2^RATIO_SCALE
-        LUX_B8: (0x0000), // 0.000 * 2^LUX_SCALE
-        LUX_M8: (0x0000) // 0.000 * 2^LUX_SCALE
     }
 };
 
+/*
+  var READBIT = (0x01);
+  var COMMAND_BIT = (0x80); // Must be 1
+  var CLEAR_BIT = (0x40); // Clears any pending interrupt (write 1 to clear)
+  var WORD_BIT = (0x20); // 1 = read/write word (rather than byte)
+  var BLOCK_BIT = (0x10); // 1 = using block read/write
+
+  var CONTROL_POWERON = (0x03);
+  var CONTROL_POWEROFF = (0x00);
+
+  var LUX_LUXSCALE = (14); // Scale by 2^14
+  var LUX_RATIOSCALE = (9); // Scale ratio by 2^9
+  var LUX_CHSCALE = (10); // Scale channel values by 2^10
+  var LUX_CHSCALE_TINT0 = (0x7517); // 322/11 * 2^TSL2561_LUX_CHSCALE
+  var LUX_CHSCALE_TINT1 = (0x0FE7); // 322/81 * 2^TSL2561_LUX_CHSCALE
+
+  var REG_CONTROL = 0x00;
+  var REG_TIMING = 0x01;
+  var REG_THRESHHOLDL_LOW = 0x02;
+  var REG_THRESHHOLDL_HIGH = 0x03;
+  var REG_THRESHHOLDH_LOW = 0x04;
+  var REG_THRESHHOLDH_HIGH = 0x05;
+  var REG_INTERRUPT = 0x06;
+  var REG_CRC = 0x08;
+  var REG_ID = 0x0A;
+  var REG_CHAN0_LOW = 0x0C;
+  var REG_CHAN0_HIGH = 0x0D;
+  var REG_CHAN1_LOW = 0x0E;
+  var REG_CHAN1_HIGH = 0x0F;
+*/
 
 TSL.prototype.enable = function () {
-    this.i2c.writeTo(this.address, [this.C.COMMAND_BIT | this.C.registers.CONTROL,
-                                    this.C.CONTROL_POWERON]);
+    this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
+                                    0x03/*CONTROL_POWERON*/]);
     return this;
 };
 
 TSL.prototype.disable = function () {
-    this.i2c.writeTo(this.address, [this.C.COMMAND_BIT | this.C.registers.CONTROL,
-                                    this.C.CONTROL_POWEROFF]);
+    this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
+                                    0/*CONTROL_POWEROFF*/]);
     return this;
 };
 
 TSL.prototype.setTiming = function (timing) {
     this.timing = timing;
-    this.i2c.writeTo(this.address, [this.C.COMMAND_BIT | this.C.registers.TIMING,
+    this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0x01/*REG_TIMING*/,
                                     this.timing | this.gain ]);
     return this;
 };
 
 TSL.prototype.setGain = function (gain) {
     this.gain = gain;
-    this.i2c.writeTo(this.address, [this.C.COMMAND_BIT | this.C.registers.TIMING,
+    this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0x01/*REG_TIMING*/,
                                     this.timing | this.gain ]);
     return this;
 };
@@ -168,24 +111,107 @@ TSL.prototype.init = function (address, timing, gain) {
     this.timing = timing;
     this.gain = gain;
 
-    this.i2c.writeTo(this.address,
-                     [
-                         this.C.COMMAND_BIT | this.C.registers.CONTROL,
-                         this.C.CONTROL_POWERON,
+    this.i2c.writeTo(this.address, [
+        0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
+        0x03/*CONTROL_POWERON*/
+    ]);
 
-                         this.C.COMMAND_BIT | this.C.registers.TIMING,
-                         this.timing | this.gain,
+    this.i2c.writeTo(this.address, [
+        0x80/*COMMAND_BIT*/ | 0x01/*REG_TIMING*/,
+        this.timing | this.gain
+    ]);
 
-                         this.C.COMMAND_BIT | this.C.registers.CONTROL,
-                         this.C.CONTROL_POWEROFF
-                     ]);
+    this.i2c.writeTo(this.address, [
+        0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
+        0/*CONTROL_POWEROFF*/
+    ]);
 
     return this;
 };
 
+TSL.prototype.getDataFromChannel = function (ch) {
+    // Get the luminosity data from the requested channel.
+
+    // Send a command to the sensor requesting the 16-bit data from the
+    // requested channel.
+    this.i2c.writeTo(
+        this.address,
+        0x80/*COMMAND_BIT*/ |
+        0x20/*WORD_BIT*/    |
+        (ch === 1 ? 0x0e/*REG_CHAN1_LOW*/ : 0x0c/*REG_CHAN0_LOW*/));
+
+    // Immediately read the next two bytes from the sensor
+    buf = this.i2c.readFrom(this.address, 2);
+
+    if (this.debug) print (buf);
+
+    // And turn it into a 16-bit value.
+    return (buf[1]<<8) | buf[0];
+};
 
 TSL.prototype.calculateLux = function (ch0, ch1) {
     // Not currently implemented.
+    //
+    // This function should use the calibration tables to convert the
+    // device-specific light-level values into Lux units.  The code is
+    // available in the Arduino library, but just hasn't been ported yet.
+    /*
+    // T, FN and CL Lux conversion tables
+    var LUX_T = {
+    LUX_K1: (0x0040), // 0.125 * 2^RATIO_SCALE
+    LUX_B1: (0x01f2), // 0.0304 * 2^LUX_SCALE
+    LUX_M1: (0x01be), // 0.0272 * 2^LUX_SCALE
+    LUX_K2: (0x0080), // 0.250 * 2^RATIO_SCALE
+    LUX_B2: (0x0214), // 0.0325 * 2^LUX_SCALE
+    LUX_M2: (0x02d1), // 0.0440 * 2^LUX_SCALE
+    LUX_K3: (0x00c0), // 0.375 * 2^RATIO_SCALE
+    LUX_B3: (0x023f), // 0.0351 * 2^LUX_SCALE
+    LUX_M3: (0x037b), // 0.0544 * 2^LUX_SCALE
+    LUX_K4: (0x0100), // 0.50 * 2^RATIO_SCALE
+    LUX_B4: (0x0270), // 0.0381 * 2^LUX_SCALE
+    LUX_M4: (0x03fe), // 0.0624 * 2^LUX_SCALE
+    LUX_K5: (0x0138), // 0.61 * 2^RATIO_SCALE
+    LUX_B5: (0x016f), // 0.0224 * 2^LUX_SCALE
+    LUX_M5: (0x01fc), // 0.0310 * 2^LUX_SCALE
+    LUX_K6: (0x019a), // 0.80 * 2^RATIO_SCALE
+    LUX_B6: (0x00d2), // 0.0128 * 2^LUX_SCALE
+    LUX_M6: (0x00fb), // 0.0153 * 2^LUX_SCALE
+    LUX_K7: (0x029a), // 1.3 * 2^RATIO_SCALE
+    LUX_B7: (0x0018), // 0.00146 * 2^LUX_SCALE
+    LUX_M7: (0x0012), // 0.00112 * 2^LUX_SCALE
+    LUX_K8: (0x029a), // 1.3 * 2^RATIO_SCALE
+    LUX_B8: (0x0000), // 0.000 * 2^LUX_SCALE
+    LUX_M8: (0x0000) // 0.000 * 2^LUX_SCALE
+    };
+
+    // CS Lux conversion tables
+    var LUX_CS = {
+    LUX_K1: (0x0043), // 0.130 * 2^RATIO_SCALE
+    LUX_B1: (0x0204), // 0.0315 * 2^LUX_SCALE
+    LUX_M1: (0x01ad), // 0.0262 * 2^LUX_SCALE
+    LUX_K2: (0x0085), // 0.260 * 2^RATIO_SCALE
+    LUX_B2: (0x0228), // 0.0337 * 2^LUX_SCALE
+    LUX_M2: (0x02c1), // 0.0430 * 2^LUX_SCALE
+    LUX_K3: (0x00c8), // 0.390 * 2^RATIO_SCALE
+    LUX_B3: (0x0253), // 0.0363 * 2^LUX_SCALE
+    LUX_M3: (0x0363), // 0.0529 * 2^LUX_SCALE
+    LUX_K4: (0x010a), // 0.520 * 2^RATIO_SCALE
+    LUX_B4: (0x0282), // 0.0392 * 2^LUX_SCALE
+    LUX_M4: (0x03df), // 0.0605 * 2^LUX_SCALE
+    LUX_K5: (0x014d), // 0.65 * 2^RATIO_SCALE
+    LUX_B5: (0x0177), // 0.0229 * 2^LUX_SCALE
+    LUX_M5: (0x01dd), // 0.0291 * 2^LUX_SCALE
+    LUX_K6: (0x019a), // 0.80 * 2^RATIO_SCALE
+    LUX_B6: (0x0101), // 0.0157 * 2^LUX_SCALE
+    LUX_M6: (0x0127), // 0.0180 * 2^LUX_SCALE
+    LUX_K7: (0x029a), // 1.3 * 2^RATIO_SCALE
+    LUX_B7: (0x0037), // 0.00338 * 2^LUX_SCALE
+    LUX_M7: (0x002b), // 0.00260 * 2^LUX_SCALE
+    LUX_K8: (0x029a), // 1.3 * 2^RATIO_SCALE
+    LUX_B8: (0x0000), // 0.000 * 2^LUX_SCALE
+    LUX_M8: (0x0000) // 0.000 * 2^LUX_SCALE
+    };
+    */
     return undefined;
 };
 
@@ -193,7 +219,9 @@ TSL.prototype.calculateLux = function (ch0, ch1) {
 TSL.prototype.getLuminosity = function(channel, callback) {
     var self = this;
 
-    // getLuminosity is asynchronous
+    // getLuminosity is asynchronous, as after triggering, the sensor needs
+    // a short time to integrate the data together before it can be read.
+    // As a result, a setTimeout is sent.
 
     var readfn = function () {
         var x1, x0, buf;
@@ -201,20 +229,14 @@ TSL.prototype.getLuminosity = function(channel, callback) {
         // If we're reading visible or infrared, we need the infrared
         // channel.  Visible is calculated using the full spectrum minus
         // the infrared channel.
-        if(channel != self.C.spectrum.FULLSPECTRUM) {
-            self.i2c.writeTo(self.address, self.C.COMMAND_BIT | self.C.WORD_BIT | self.C.registers.CHAN1_LOW);
-            buf = self.i2c.readFrom(self.address, 2);
-            x1 = (buf[1]<<8) | buf[0];
-//            print (buf);
+        if(channel != self.config.spectrum.FULLSPECTRUM) {
+            x1 = self.getDataFromChannel(1);
         }
 
         // If we're reading full-spectrum or visible, we need the
         // full-spectrum channel, for the same reason as above.
-        if(channel != self.C.spectrum.INFRARED) {
-            self.i2c.writeTo(self.address, self.C.COMMAND_BIT | self.C.WORD_BIT | self.C.registers.CHAN0_LOW);
-            buf = self.i2c.readFrom(self.address, 2);
-            x0 = (buf[1]<<8) | buf[0];
-//            print (buf);
+        if(channel != self.config.spectrum.INFRARED) {
+            x0 = self.getDataFromChannel(0);
         }
 
         // Switch off the sensor
@@ -225,16 +247,16 @@ TSL.prototype.getLuminosity = function(channel, callback) {
 
         // Call the callback with the requested value.
         switch (channel) {
-        case self.C.spectrum.INFRARED:
-            callback(x1);
+        case self.config.spectrum.INFRARED:
+            callback(x1/readfn.scale);
             return;
 
-        case self.C.spectrum.VISIBLE:
-            callback(x0 - x1);
+        case self.config.spectrum.VISIBLE:
+            callback((x0 - x1)/readfn.scale);
             return;
 
-        default:// case self.C.spectrum.FULLSPECTRUM:
-            callback(x0);
+        default:// case self.config.spectrum.FULLSPECTRUM:
+            callback(x0/readfn.scale);
             return;
         }
     };
@@ -244,6 +266,7 @@ TSL.prototype.getLuminosity = function(channel, callback) {
     // (error state)
     if(this._read_timeout) {
         setTimeout(function () { callback(null); }, 0);
+        this._read_timeout = false;
         return this;
     }
 
@@ -255,28 +278,59 @@ TSL.prototype.getLuminosity = function(channel, callback) {
     // Switch on the sensor
     this.enable();
 
+
+    // Now that the sensor is set up -- and should be integrating data --
+    // we need to schedule the data collection using a timeout.
+    //
+    // We can also set the scaling factor: the sum of light-things
+    // accumulated over the integration period will be relative to the
+    // time spent integrating, so divide to scale it.  These scaling
+    // values and the process to calculate them come from the TSL2561 data
+    // sheet.
+
+    var int_time;
+
+    switch (this.timing) {
+    case this.config.timing._13MS:
+        readfn.scale = 0.034;
+        int_time = 14;
+        break;
+
+    case this.config.timing._101MS:
+        readfn.scale = 0.252;
+        int_time = 102;
+        break;
+
+    default:// case this.config.timing._402MS:
+        readfn.scale = 1;
+        int_time = 403;
+    }
+
     // Set up a timeout to read the data and execute the callback once
     // enough time has passed for the integration to occur.
-    switch (this.timing) {
-    case this.C.timing._13MS:
-        this._read_timeout = setTimeout(readfn, 14);
-        return this;
+    this._read_timeout = setTimeout(readfn, int_time);
 
-    case this.C.timing._101MS:
-        this._read_timeout = setTimeout(readfn, 102);
-        return this;
-
-    default:// case this.C.timing._402MS:
-        this._read_timeout = setTimeout(readfn, 403);
-        return this;
-    }
+    return this;
 };
 
-I2C1.setup({sda:B9, scl:B8});
-var tsl = new TSL(I2C1);
-tsl.init(tsl.C.address.FLOAT, tsl.C.timing._402MS, tsl.C.gain._0X);
+////////////////////////////////////////////////////////////////////////////
 
-setInterval(function () {
-    tsl.getLuminosity(tsl.C.spectrum.VISIBLE, function (x) { print ("L="+x); });
-}, 1000);
+function test() {
+    I2C1.setup({sda:B7, scl:B6});
+    var tsl = new TSL(I2C1);
+    //tsl.debug = true;
 
+    tsl.init(tsl.config.address.FLOAT,
+             tsl.config.timing._402MS,
+             tsl.config.gain._0X);
+
+    setInterval(function () {
+        tsl.getLuminosity(
+            tsl.config.spectrum.VISIBLE,
+            function (x) { print ("L="+x); }
+        );
+    }, 1000);
+}
+
+
+test();
