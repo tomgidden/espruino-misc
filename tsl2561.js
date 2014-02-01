@@ -221,7 +221,7 @@ TSL.prototype.getLuminosity = function(channel, callback) {
         self.disable();
 
         // Clear the timeout, unlocking the sensor for future use.
-        this._read_timeout = undefined;
+        self._read_timeout = false;
 
         // Call the callback with the requested value.
         switch (channel) {
