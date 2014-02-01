@@ -21,10 +21,11 @@
 
 function TSL(i2c) {
     this.i2c = i2c;
+    this.debug = false;
 }
 
 // All the constants we should need to drive this thing
-TSL.prototype.C = {
+TSL.prototype.config = {
     spectrum: {
         FULLSPECTRUM: 0,
         INFRARED: 1,
@@ -37,6 +38,19 @@ TSL.prototype.C = {
         HIGH: 0x49
     },
 
+    timing: {
+        _13MS: 0x00, // 13.7ms
+        _101MS: 0x01, // 101ms
+        _402MS: 0x02 // 402ms
+    },
+
+    gain: {
+        _0X: 0x00, // No gain
+        _16X: 0x10 // 16x gain
+    }
+};
+
+TSL.prototype.C = {
     READBIT: (0x01),
     COMMAND_BIT: (0x80), // Must be 1
     CLEAR_BIT: (0x40), // Clears any pending interrupt (write 1 to clear)
@@ -68,17 +82,7 @@ TSL.prototype.C = {
         CHAN1_HIGH: 0x0F
     },
 
-    timing: {
-        _13MS: 0x00, // 13.7ms
-        _101MS: 0x01, // 101ms
-        _402MS: 0x02 // 402ms
-    },
-
-    gain: {
-        _0X: 0x00, // No gain
-        _16X: 0x10 // 16x gain
-    },
-
+    // Currently unused...
     // T, FN and CL package values
     values_t: {
         LUX_K1: (0x0040), // 0.125 * 2^RATIO_SCALE
@@ -136,7 +140,6 @@ TSL.prototype.C = {
     }
 };
 
-
 TSL.prototype.enable = function () {
     this.i2c.writeTo(this.address, [this.C.COMMAND_BIT | this.C.registers.CONTROL,
                                     this.C.CONTROL_POWERON]);
@@ -186,6 +189,10 @@ TSL.prototype.init = function (address, timing, gain) {
 
 TSL.prototype.calculateLux = function (ch0, ch1) {
     // Not currently implemented.
+    //
+    // This function should use the calibration tables to convert the
+    // device-specific light-level values into Lux units.  The code is
+    // available in the Arduino library, but just hasn't been ported yet.
     return undefined;
 };
 
@@ -201,20 +208,20 @@ TSL.prototype.getLuminosity = function(channel, callback) {
         // If we're reading visible or infrared, we need the infrared
         // channel.  Visible is calculated using the full spectrum minus
         // the infrared channel.
-        if(channel != self.C.spectrum.FULLSPECTRUM) {
+        if(channel != self.config.spectrum.FULLSPECTRUM) {
             self.i2c.writeTo(self.address, self.C.COMMAND_BIT | self.C.WORD_BIT | self.C.registers.CHAN1_LOW);
             buf = self.i2c.readFrom(self.address, 2);
             x1 = (buf[1]<<8) | buf[0];
-//            print (buf);
+            if (self.debug) print (buf);
         }
 
         // If we're reading full-spectrum or visible, we need the
         // full-spectrum channel, for the same reason as above.
-        if(channel != self.C.spectrum.INFRARED) {
+        if(channel != self.config.spectrum.INFRARED) {
             self.i2c.writeTo(self.address, self.C.COMMAND_BIT | self.C.WORD_BIT | self.C.registers.CHAN0_LOW);
             buf = self.i2c.readFrom(self.address, 2);
             x0 = (buf[1]<<8) | buf[0];
-//            print (buf);
+            if (self.debug) print (buf);
         }
 
         // Switch off the sensor
@@ -225,15 +232,15 @@ TSL.prototype.getLuminosity = function(channel, callback) {
 
         // Call the callback with the requested value.
         switch (channel) {
-        case self.C.spectrum.INFRARED:
+        case self.config.spectrum.INFRARED:
             callback(x1);
             return;
 
-        case self.C.spectrum.VISIBLE:
+        case self.config.spectrum.VISIBLE:
             callback(x0 - x1);
             return;
 
-        default:// case self.C.spectrum.FULLSPECTRUM:
+        default:// case self.config.spectrum.FULLSPECTRUM:
             callback(x0);
             return;
         }
@@ -258,25 +265,25 @@ TSL.prototype.getLuminosity = function(channel, callback) {
     // Set up a timeout to read the data and execute the callback once
     // enough time has passed for the integration to occur.
     switch (this.timing) {
-    case this.C.timing._13MS:
+    case this.config.timing._13MS:
         this._read_timeout = setTimeout(readfn, 14);
         return this;
 
-    case this.C.timing._101MS:
+    case this.config.timing._101MS:
         this._read_timeout = setTimeout(readfn, 102);
         return this;
 
-    default:// case this.C.timing._402MS:
+    default:// case this.config.timing._402MS:
         this._read_timeout = setTimeout(readfn, 403);
         return this;
     }
 };
 
-I2C1.setup({sda:B9, scl:B8});
+I2C1.setup({sda:B7, scl:B6});
 var tsl = new TSL(I2C1);
-tsl.init(tsl.C.address.FLOAT, tsl.C.timing._402MS, tsl.C.gain._0X);
+tsl.init(tsl.config.address.FLOAT, tsl.config.timing._402MS, tsl.config.gain._0X);
 
 setInterval(function () {
-    tsl.getLuminosity(tsl.C.spectrum.VISIBLE, function (x) { print ("L="+x); });
+    tsl.getLuminosity(tsl.config.spectrum.VISIBLE, function (x) { print ("L="+x); });
 }, 1000);
 
