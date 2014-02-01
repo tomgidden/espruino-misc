@@ -278,7 +278,6 @@ TSL.prototype.getLuminosity = function(channel, callback) {
     // Switch on the sensor
     this.enable();
 
-
     // Now that the sensor is set up -- and should be integrating data --
     // we need to schedule the data collection using a timeout.
     //
@@ -331,6 +330,5 @@ function test() {
         );
     }, 1000);
 }
-
 
 test();
