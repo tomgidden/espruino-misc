@@ -44,7 +44,7 @@ TSL.prototype.config = {
     },
 
     gain: {
-        _0X: 0x00, // No gain
+        _1X: 0x00, // No gain
         _16X: 0x10 // 16x gain
     }
 };
@@ -80,18 +80,23 @@ TSL.prototype.config = {
   var REG_CHAN1_HIGH = 0x0F;
 */
 
+// Power up and enable the sensor's data gathering process
 TSL.prototype.enable = function () {
     this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
                                     0x03/*CONTROL_POWERON*/]);
     return this;
 };
 
+// Disable the sensor's data gathering process and power down.
 TSL.prototype.disable = function () {
     this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0/*REG_CONTROL*/,
                                     0/*CONTROL_POWEROFF*/]);
     return this;
 };
 
+// Set the integration timing for the sensor, using values from
+// TSL.config.timing.  Setting this to TSL.config.timing._402MS will
+// gather the most data (using the automatic integration, that is)
 TSL.prototype.setTiming = function (timing) {
     this.timing = timing;
     this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0x01/*REG_TIMING*/,
@@ -99,6 +104,8 @@ TSL.prototype.setTiming = function (timing) {
     return this;
 };
 
+// Set the gain of the sensor, to either TSL.config.gain._1X (no gain) or
+// TSL.config.gain._16X (16x gain)
 TSL.prototype.setGain = function (gain) {
     this.gain = gain;
     this.i2c.writeTo(this.address, [0x80/*COMMAND_BIT*/ | 0x01/*REG_TIMING*/,
@@ -106,6 +113,11 @@ TSL.prototype.setGain = function (gain) {
     return this;
 };
 
+// Initialise the TSL object and send the passed initial configuration to
+// the sensor.  The address should be taken from TSL.config.address.LOW,
+// .FLOAT, or .HIGH.  If the ADDR pin on the sensor is left unconnected,
+// address should be TSL.config.address.FLOAT. Alternatively it can be
+// pulled high or low to use an alternative address.
 TSL.prototype.init = function (address, timing, gain) {
     this.address = address;
     this.timing = timing;
@@ -127,26 +139,6 @@ TSL.prototype.init = function (address, timing, gain) {
     ]);
 
     return this;
-};
-
-TSL.prototype.getDataFromChannel = function (ch) {
-    // Get the luminosity data from the requested channel.
-
-    // Send a command to the sensor requesting the 16-bit data from the
-    // requested channel.
-    this.i2c.writeTo(
-        this.address,
-        0x80/*COMMAND_BIT*/ |
-        0x20/*WORD_BIT*/    |
-        (ch === 1 ? 0x0e/*REG_CHAN1_LOW*/ : 0x0c/*REG_CHAN0_LOW*/));
-
-    // Immediately read the next two bytes from the sensor
-    buf = this.i2c.readFrom(this.address, 2);
-
-    if (this.debug) print (buf);
-
-    // And turn it into a 16-bit value.
-    return (buf[1]<<8) | buf[0];
 };
 
 TSL.prototype.calculateLux = function (ch0, ch1) {
@@ -219,24 +211,48 @@ TSL.prototype.calculateLux = function (ch0, ch1) {
 TSL.prototype.getLuminosity = function(channel, callback) {
     var self = this;
 
-    // getLuminosity is asynchronous, as after triggering, the sensor needs
-    // a short time to integrate the data together before it can be read.
-    // As a result, a setTimeout is sent.
+    // getLuminosity is asynchronous, as after triggering, the sensor
+    // needs a short time to integrate the data together before it can be
+    // read.  As a result, the sensor is initialised and a setTimeout is
+    // set to the readCallback function.  The readCallback function should
+    // then collect the data and pass it to 'callback'.
 
-    var readfn = function () {
+    // Get the luminosity data from the requested channel.
+    var getDataFromChannel = function (ch) {
+
+        // Send a command to the sensor requesting the 16-bit data from
+        // the requested channel.
+        self.i2c.writeTo(
+            self.address,
+            0x80/*COMMAND_BIT*/ |
+                0x20/*WORD_BIT*/    |
+                (ch === 1 ? 0x0e/*REG_CHAN1_LOW*/ : 0x0c/*REG_CHAN0_LOW*/));
+
+        // Immediately read the next two bytes from the sensor
+        buf = self.i2c.readFrom(self.address, 2);
+
+        if (self.debug) print (buf);
+
+        // And turn it into a 16-bit value.
+        return (buf[1]<<8) | buf[0];
+    };
+
+    // The timeout should trigger readCallback to collect the data from
+    // the sensor and execute the return callback passed to getLuminosity.
+    var readCallback = function () {
         var x1, x0, buf;
 
         // If we're reading visible or infrared, we need the infrared
         // channel.  Visible is calculated using the full spectrum minus
         // the infrared channel.
         if(channel != self.config.spectrum.FULLSPECTRUM) {
-            x1 = self.getDataFromChannel(1);
+            x1 = getDataFromChannel(1);
         }
 
         // If we're reading full-spectrum or visible, we need the
         // full-spectrum channel, for the same reason as above.
         if(channel != self.config.spectrum.INFRARED) {
-            x0 = self.getDataFromChannel(0);
+            x0 = getDataFromChannel(0);
         }
 
         // Switch off the sensor
@@ -248,15 +264,15 @@ TSL.prototype.getLuminosity = function(channel, callback) {
         // Call the callback with the requested value.
         switch (channel) {
         case self.config.spectrum.INFRARED:
-            callback(x1/readfn.scale);
+            callback(x1/readCallback.scale);
             return;
 
         case self.config.spectrum.VISIBLE:
-            callback((x0 - x1)/readfn.scale);
+            callback((x0 - x1)/readCallback.scale);
             return;
 
         default:// case self.config.spectrum.FULLSPECTRUM:
-            callback(x0/readfn.scale);
+            callback(x0/readCallback.scale);
             return;
         }
     };
@@ -291,23 +307,23 @@ TSL.prototype.getLuminosity = function(channel, callback) {
 
     switch (this.timing) {
     case this.config.timing._13MS:
-        readfn.scale = 0.034;
+        readCallback.scale = 0.034;
         int_time = 14;
         break;
 
     case this.config.timing._101MS:
-        readfn.scale = 0.252;
+        readCallback.scale = 0.252;
         int_time = 102;
         break;
 
     default:// case this.config.timing._402MS:
-        readfn.scale = 1;
+        readCallback.scale = 1;
         int_time = 403;
     }
 
     // Set up a timeout to read the data and execute the callback once
     // enough time has passed for the integration to occur.
-    this._read_timeout = setTimeout(readfn, int_time);
+    this._read_timeout = setTimeout(readCallback, int_time);
 
     return this;
 };
@@ -321,7 +337,7 @@ function test() {
 
     tsl.init(tsl.config.address.FLOAT,
              tsl.config.timing._402MS,
-             tsl.config.gain._0X);
+             tsl.config.gain._1X);
 
     setInterval(function () {
         tsl.getLuminosity(
